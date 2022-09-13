@@ -2,7 +2,7 @@ package ioc
 
 import (
 	"errors"
-	"log"
+	"fmt"
 	"reflect"
 	"sync"
 )
@@ -10,12 +10,21 @@ import (
 type definition struct {
 	name      string
 	kind      reflect.Type
+	realKind  reflect.Type
 	construct any
 	instance  *reflect.Value
-	opts      struct {
-		lazy  bool
-		scope string
-	}
+	opts      definitionOpt
+	mutex     sync.Mutex
+}
+
+type definitionOpt struct {
+	lazy  bool
+	scope string
+}
+
+type definitionGroup struct {
+	group  map[string]*definition
+	primer *definition
 }
 
 type Ioc interface {
@@ -23,63 +32,118 @@ type Ioc interface {
 	Call(f any) error
 }
 
-func New() Ioc {
-	return &ioc{}
+func New(opts ...Opts) Ioc {
+	if len(opts) == 0 {
+		return &ioc{}
+	}
+	return &ioc{opts: opts[0]}
 }
 
 type ioc struct {
-	container map[reflect.Type]map[string]*definition
+	container map[reflect.Type]*definitionGroup
+	opts      Opts
 	mutex     sync.Mutex
 }
 
-type opts struct {
+type Opts struct {
+	EnablePostConstruct bool
 }
 
 func (i *ioc) Register(resolver any) {
-	i.bind(resolver, "")
+	i.RegisterWithName(resolver, "")
 }
 
-func (i *ioc) bind(resolver any, name string) {
+func (i *ioc) RegisterWithName(resolver any, name string) {
+	i.bind(resolver, name)
+}
+
+func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
 	if i.container == nil {
-		i.container = make(map[reflect.Type]map[string]*definition, 0)
+		i.container = make(map[reflect.Type]*definitionGroup, 0)
 	}
 
 	t := reflect.TypeOf(resolver)
 	if t.Kind() != reflect.Func {
 		panic("")
 	}
-	if t.NumOut() == 1 {
-		if _, exist := i.container[t.Out(0)]; !exist {
-			i.container[t.Out(0)] = make(map[string]*definition)
-		}
-	} else {
-		panic("resolver should return only one ")
+	if t.NumOut() != 1 {
+		panic("resolver should return only one")
 	}
 	outType := t.Out(0)
-	i.container[outType][name] = &definition{
+	if outType.Kind() == reflect.Pointer {
+		outType = outType.Elem()
+	}
+	if _, exist := i.container[outType]; !exist {
+		i.container[outType] = &definitionGroup{group: make(map[string]*definition), primer: nil}
+	}
+
+	i.container[outType].group[name] = &definition{
 		name:      name,
 		kind:      outType,
+		realKind:  t.Out(0),
 		construct: resolver,
 		instance:  nil,
+	}
+	if len(i.container[outType].group) == 1 {
+		i.container[outType].primer = i.container[outType].group[name]
 	}
 }
 
 func (i *ioc) resolve(r reflect.Type, name string) reflect.Value {
-	d := i.container[r][name]
-	return i.instance(d)
+	tr := r
+	if r.Kind() == reflect.Pointer {
+		tr = r.Elem()
+	}
+
+	if _, exist := i.container[tr]; !exist {
+		panic(fmt.Sprintf("type [%+v] not exits", r))
+	}
+	var d *definition
+	if len(i.container[tr].group) == 1 {
+		d = i.container[tr].primer
+	} else {
+		var find bool
+		d, find = i.container[tr].group[name]
+		if !find {
+			panic(fmt.Sprintf("type [%+v<%s>] not exits", r, name))
+		}
+	}
+	instance := i.instance(d)
+
+	if r.Kind() == reflect.Pointer && d.realKind.Kind() == reflect.Struct {
+		if instance.CanAddr() {
+			return instance.Addr()
+		}
+	} else if r.Kind() == reflect.Struct && d.realKind.Kind() == reflect.Pointer {
+		return instance.Elem()
+	}
+	return instance
 }
 
 func (i *ioc) instance(d *definition) reflect.Value {
 	if d.instance == nil {
-		//i.mutex.Lock()
-		//defer i.mutex.Unlock()
-		log.Printf("init %+v", *d)
+		d.mutex.Lock()
+		defer d.mutex.Unlock()
 
 		in, _ := i.arguments(d.construct)
 		f := reflect.ValueOf(d.construct)
 		out := f.Call(in)
-		bean := out[0].Interface()
-		d.instance = &out[0]
+		beanReflect := out[0]
+		bean := beanReflect.Interface()
+		d.instance = &beanReflect
+
+		if beanReflect.Kind() == reflect.Pointer && beanReflect.Elem().Kind() == reflect.Struct {
+			for j := 0; j < beanReflect.Elem().NumField(); j++ {
+				t := d.kind.Field(j)
+				if value, ok := t.Tag.Lookup("autowire"); ok {
+					f := beanReflect.Elem().Field(j)
+					// log.Printf("autowire: %+v<name:%s> for field %s", f.Type(), value, t.Name)
+					f.Set(i.resolve(f.Type(), value))
+				}
+			}
+		}
 
 		i, ok := bean.(PostConstruct)
 		if ok {
@@ -93,7 +157,6 @@ func (i *ioc) arguments(f any) ([]reflect.Value, error) {
 	t := reflect.TypeOf(f)
 	in := []reflect.Value{}
 	for j := 0; j < t.NumIn(); j++ {
-		log.Printf("%+v\n", t.In(j).String())
 		in = append(in, i.resolve(t.In(j), ""))
 	}
 	return in, nil

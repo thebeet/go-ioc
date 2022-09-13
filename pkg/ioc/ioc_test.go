@@ -44,14 +44,43 @@ func (b *bar) PostConstruct() {
 }
 
 func TestIoc(t *testing.T) {
-	i := New()
-	i.Register(NewFoo)
-	i.Register(NewBar)
+	ioc := New()
 
-	i.Call(func(bar Bar) {
+	ioc.Register(NewFoo)
+	ioc.Register(NewBar)
+
+	ioc.Call(func(bar Bar) {
 		s := bar.World()
 		if s != "Hello,Wolrd:PostConstruct" {
 			t.Errorf("ioc fail, expect Hello,Wolrd:PostConstruct but %s", s)
+		}
+	})
+}
+
+func TestAutoWire(t *testing.T) {
+	type Foo struct {
+		S string
+	}
+	type Bar struct {
+		FooImpl *Foo `autowire:""`
+	}
+	NewFoo := func() *Foo {
+		f := Foo{}
+		f.S = "foo"
+		return &f
+	}
+	NewBar := func() *Bar {
+		return &Bar{}
+	}
+
+	ioc := New()
+
+	ioc.Register(NewFoo)
+	ioc.Register(NewBar)
+
+	ioc.Call(func(bar *Bar) {
+		if bar.FooImpl.S != "foo" {
+			t.Errorf("autowire fail")
 		}
 	})
 }
