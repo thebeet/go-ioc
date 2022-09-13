@@ -1,5 +1,13 @@
 package ioc
 
-type PostConstruct interface {
-	PostConstruct()
+type IocPostConstruct interface {
+	IocPostConstruct()
+}
+
+type IocInstanceNameAware interface {
+	SetIocInstanceName(name string)
+}
+
+type IocContainerAware interface {
+	SetIocContainer(container Ioc)
 }

@@ -29,7 +29,12 @@ type definitionGroup struct {
 
 type Ioc interface {
 	Register(resolver any)
+	RegisterWithName(resolver any, name string)
+
+	RegisterInstance(instance any)
+	RegisterInstanceWithName(instance any, name string)
 	Call(f any) error
+	Fill(f any) error
 }
 
 func New(opts ...Opts) Ioc {
@@ -57,6 +62,47 @@ func (i *ioc) RegisterWithName(resolver any, name string) {
 	i.bind(resolver, name)
 }
 
+func (i *ioc) RegisterInstance(instance any) {
+	i.RegisterInstanceWithName(instance, "")
+}
+
+func (i *ioc) RegisterInstanceWithName(instance any, name string) {
+	i.bindInstance(instance, name)
+}
+
+func (i *ioc) Call(f any) error {
+	t := reflect.ValueOf(f)
+	if t.Kind() != reflect.Func {
+		return errors.New("func only")
+	}
+	arguments, err := i.arguments(f)
+	if err != nil {
+		return err
+	}
+	_ = t.Call(arguments)
+	return nil
+}
+
+func (i *ioc) Fill(f any) error {
+	if reflect.TypeOf(f).Kind() == reflect.Pointer {
+		t := reflect.TypeOf(f).Elem()
+		v := reflect.ValueOf(f).Elem()
+		for j := 0; j < t.NumField(); j++ {
+			field := t.Field(j)
+			if value, ok := field.Tag.Lookup("autowire"); ok {
+				valueField := v.Field(j)
+				valueField.Set(i.resolve(valueField.Type(), value))
+			}
+		}
+	}
+	return nil
+}
+
+func (i *ioc) fill(v reflect.Value) error {
+
+	return nil
+}
+
 func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
@@ -66,10 +112,10 @@ func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
 
 	t := reflect.TypeOf(resolver)
 	if t.Kind() != reflect.Func {
-		panic("")
+		panic("resolver should be a construct func")
 	}
 	if t.NumOut() != 1 {
-		panic("resolver should return only one")
+		panic("resolver should be a construct func return only one")
 	}
 	outType := t.Out(0)
 	if outType.Kind() == reflect.Pointer {
@@ -88,6 +134,34 @@ func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
 	}
 	if len(i.container[outType].group) == 1 {
 		i.container[outType].primer = i.container[outType].group[name]
+	}
+}
+
+func (i *ioc) bindInstance(instance any, name string, opts ...definitionOpt) {
+	i.mutex.Lock()
+	defer i.mutex.Unlock()
+	if i.container == nil {
+		i.container = make(map[reflect.Type]*definitionGroup, 0)
+	}
+
+	t := reflect.TypeOf(instance)
+	v := reflect.ValueOf(instance)
+	if t.Kind() == reflect.Pointer {
+		t = t.Elem()
+	}
+	if _, exist := i.container[t]; !exist {
+		i.container[t] = &definitionGroup{group: make(map[string]*definition), primer: nil}
+	}
+
+	i.container[t].group[name] = &definition{
+		name:      name,
+		kind:      t,
+		realKind:  reflect.TypeOf(instance),
+		construct: nil,
+		instance:  &v,
+	}
+	if len(i.container[t].group) == 1 {
+		i.container[t].primer = i.container[t].group[name]
 	}
 }
 
@@ -145,9 +219,16 @@ func (i *ioc) instance(d *definition) reflect.Value {
 			}
 		}
 
-		i, ok := bean.(PostConstruct)
-		if ok {
-			i.PostConstruct()
+		if t, ok := bean.(IocPostConstruct); ok {
+			t.IocPostConstruct()
+		}
+
+		if t, ok := bean.(IocContainerAware); ok {
+			t.SetIocContainer(i)
+		}
+
+		if t, ok := bean.(IocInstanceNameAware); ok {
+			t.SetIocInstanceName(d.name)
 		}
 	}
 	return *d.instance
@@ -160,17 +241,4 @@ func (i *ioc) arguments(f any) ([]reflect.Value, error) {
 		in = append(in, i.resolve(t.In(j), ""))
 	}
 	return in, nil
-}
-
-func (i *ioc) Call(f any) error {
-	t := reflect.ValueOf(f)
-	if t.Kind() != reflect.Func {
-		return errors.New("func only")
-	}
-	arguments, err := i.arguments(f)
-	if err != nil {
-		return err
-	}
-	_ = t.Call(arguments)
-	return nil
 }
