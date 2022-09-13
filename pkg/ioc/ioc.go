@@ -7,19 +7,18 @@ import (
 	"sync"
 )
 
+type DefinitionOpt struct {
+	Lazy  bool
+	Scope string
+}
 type definition struct {
 	name      string
 	kind      reflect.Type
 	realKind  reflect.Type
 	construct any
 	instance  *reflect.Value
-	opts      definitionOpt
+	opts      DefinitionOpt
 	mutex     sync.Mutex
-}
-
-type definitionOpt struct {
-	lazy  bool
-	scope string
 }
 
 type definitionGroup struct {
@@ -33,7 +32,7 @@ type Ioc interface {
 
 	RegisterInstance(instance any)
 	RegisterInstanceWithName(instance any, name string)
-	Call(f any) error
+	Call(closure any) error
 	Fill(f any) error
 }
 
@@ -70,12 +69,12 @@ func (i *ioc) RegisterInstanceWithName(instance any, name string) {
 	i.bindInstance(instance, name)
 }
 
-func (i *ioc) Call(f any) error {
-	t := reflect.ValueOf(f)
+func (i *ioc) Call(closure any) error {
+	t := reflect.ValueOf(closure)
 	if t.Kind() != reflect.Func {
 		return errors.New("func only")
 	}
-	arguments, err := i.arguments(f)
+	arguments, err := i.arguments(closure)
 	if err != nil {
 		return err
 	}
@@ -98,12 +97,7 @@ func (i *ioc) Fill(f any) error {
 	return nil
 }
 
-func (i *ioc) fill(v reflect.Value) error {
-
-	return nil
-}
-
-func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
+func (i *ioc) bind(resolver any, name string, opts ...DefinitionOpt) {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
 	if i.container == nil {
@@ -137,7 +131,7 @@ func (i *ioc) bind(resolver any, name string, opts ...definitionOpt) {
 	}
 }
 
-func (i *ioc) bindInstance(instance any, name string, opts ...definitionOpt) {
+func (i *ioc) bindInstance(instance any, name string, opts ...DefinitionOpt) {
 	i.mutex.Lock()
 	defer i.mutex.Unlock()
 	if i.container == nil {
@@ -200,21 +194,30 @@ func (i *ioc) instance(d *definition) reflect.Value {
 	if d.instance == nil {
 		d.mutex.Lock()
 		defer d.mutex.Unlock()
-
 		in, _ := i.arguments(d.construct)
-		f := reflect.ValueOf(d.construct)
-		out := f.Call(in)
+		construct := reflect.ValueOf(d.construct)
+		out := construct.Call(in)
 		beanReflect := out[0]
 		bean := beanReflect.Interface()
 		d.instance = &beanReflect
 
-		if beanReflect.Kind() == reflect.Pointer && beanReflect.Elem().Kind() == reflect.Struct {
-			for j := 0; j < beanReflect.Elem().NumField(); j++ {
-				t := d.kind.Field(j)
+		target := beanReflect
+		targetType := reflect.TypeOf(bean)
+
+		for targetType.Kind() == reflect.Pointer {
+			targetType = targetType.Elem()
+			target = target.Elem()
+		}
+		for target.Kind() == reflect.Pointer {
+			target = target.Elem()
+		}
+
+		if target.Kind() == reflect.Struct {
+			for j := 0; j < target.NumField(); j++ {
+				t := targetType.Field(j)
 				if value, ok := t.Tag.Lookup("autowire"); ok {
-					f := beanReflect.Elem().Field(j)
-					// log.Printf("autowire: %+v<name:%s> for field %s", f.Type(), value, t.Name)
-					f.Set(i.resolve(f.Type(), value))
+					field := target.Field(j)
+					field.Set(i.resolve(field.Type(), value))
 				}
 			}
 		}
@@ -234,8 +237,8 @@ func (i *ioc) instance(d *definition) reflect.Value {
 	return *d.instance
 }
 
-func (i *ioc) arguments(f any) ([]reflect.Value, error) {
-	t := reflect.TypeOf(f)
+func (i *ioc) arguments(closure any) ([]reflect.Value, error) {
+	t := reflect.TypeOf(closure)
 	in := []reflect.Value{}
 	for j := 0; j < t.NumIn(); j++ {
 		in = append(in, i.resolve(t.In(j), ""))

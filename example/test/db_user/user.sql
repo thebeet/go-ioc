@@ -5,7 +5,7 @@ CREATE TABLE `user` (
 
 ALTER TABLE `user`
   ADD PRIMARY KEY (`id`) ,
-  ADD KEY `name` (`name`);
+  ADD UNIQUE KEY `name` (`name`);
 
 ALTER TABLE `user`
   MODIFY `id` int(11) NOT NULL AUTO_INCREMENT;

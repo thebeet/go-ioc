@@ -15,3 +15,17 @@ services:
             - ./test/db_user:/docker-entrypoint-initdb.d
         ports:
             - '8306:3306'
+    db_order:
+        image: "mysql:5.6"
+        restart: always
+        command: "--max_allowed_packet=16M --character-set-server=utf8 --character-set-filesystem=utf8 --skip-character-set-client-handshake --default-authentication-plugin=mysql_native_password"
+        environment:
+            MYSQL_DATABASE: order
+            MYSQL_USER: order
+            MYSQL_PASSWORD: orderpass
+            MYSQL_ROOT_PASSWORD: rootpass
+            TZ: Asia/Shanghai
+        volumes:
+            - ./test/db_order:/docker-entrypoint-initdb.d
+        ports:
+            - '8307:3306'

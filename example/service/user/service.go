@@ -15,12 +15,12 @@ type Service interface {
 	GetUserByName(name string) *User
 }
 
-func New(db *sql.DB) Service {
-	return &service{db}
+func New() Service {
+	return &service{}
 }
 
 type service struct {
-	Db *sql.DB
+	Db *sql.DB `autowire:"db_user"`
 }
 
 func (s *service) GetUserByName(name string) *User {
