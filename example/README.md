@@ -1,1 +1,1 @@
-一个简单的实例，在gin框架的基础上使用ioc实现依赖自动注入
+A simple web application powered by Gin & IOC
