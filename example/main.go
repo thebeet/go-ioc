@@ -2,8 +2,9 @@ package main
 
 import (
 	"database/sql"
-	"example/db"
+	"example/component/db"
 	"example/service/order"
+	_ "example/service/order-impl"
 	"example/service/user"
 	"net/http"
 	"strconv"
